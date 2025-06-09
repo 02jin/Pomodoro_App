@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'timer_page.dart';  // timer_page.dart 파일을 import
+import 'timer.dart';  // timer_page.dart 파일을 import
 
 void main() {
   runApp(const PomodoroApp());
