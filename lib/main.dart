@@ -21,7 +21,7 @@ class PomodoroApp extends StatelessWidget {
         useMaterial3: true,
       ),
       // 앱이 시작되면 바로 타이머 페이지를 보여줌
-      home: const TimerPage(),
+      home: TimerPage(),
     );
   }
 }
