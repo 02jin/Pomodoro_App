@@ -14,21 +14,33 @@ dependencies:
 
   cupertino_icons: ^1.0.8
 
-dev_dependencies:
-  flutter_test:
-    sdk: flutter
-
   shared_preferences: ^2.2.2  # 로컬 저장소
   flutter_local_notifications: ^16.3.0  # 로컬 알림
   permission_handler: ^11.3.0  # 권한 관리
   vibration: ^1.8.4  # 진동 기능
   flutter_background_service: ^5.0.5  # 백그라운드 서비스
   flutter_background_service_android: ^6.2.2  # 안드로이드 백그라운드
+  audioplayers: ^6.0.0 
   
+  http: ^1.1.0  # HTTP 통신 (날씨 API)
+  geolocator: ^10.1.0  # 위치 정보
+  geocoding: ^2.1.1  # 지오코딩
+  sensors_plus: ^4.0.2  # 센서 데이터 (온도 등)
+  battery_plus: ^5.0.2  # 배터리 정보
+  device_info_plus: ^9.1.2  # 디바이스 정보
+  connectivity_plus: ^5.0.2  # 네트워크 연결 상태
+  intl: ^0.19.0  # 날짜/시간 포맷팅
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
   flutter_lints: ^5.0.0
 
 flutter:
 
   uses-material-design: true
+
+  assets:
+    - assets/sounds/
 
   

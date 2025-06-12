@@ -3,6 +3,8 @@ import 'dart:async';
 import 'storage_service.dart';
 import 'notification_service.dart';
 import 'background_service.dart';
+import 'environment_service.dart';
+import 'heatstroke_prevention_service.dart';
 
 // 타이머의 현재 상태를 나타내는 enum
 enum TimerState {
@@ -42,6 +44,12 @@ class _TimerPageState extends State<TimerPage> with WidgetsBindingObserver {
   
   // === 백그라운드 관리 변수들 ===
   bool _isBackgroundMode = false;  // 백그라운드 모드 여부
+  
+  // === 5단계: 환경 데이터 관리 변수들 ===
+  EnvironmentData? _currentEnvironmentData;
+  List<WaterIntakeRecord> _todayWaterIntake = [];
+  String _lastAlert = '';
+  bool _autoAdjustEnabled = true;  // 자동 시간 조정 활성화 여부
 
   @override
   void initState() {
@@ -56,6 +64,8 @@ class _TimerPageState extends State<TimerPage> with WidgetsBindingObserver {
     // 위젯이 삭제될 때 타이머를 정리해줌 (메모리 누수 방지)
     _timer?.cancel();
     BackgroundService.stopBackgroundTimer();
+    EnvironmentService.dispose();
+    HeatstrokePreventionService.dispose();
     super.dispose();
   }
 
@@ -87,11 +97,126 @@ class _TimerPageState extends State<TimerPage> with WidgetsBindingObserver {
     // 백그라운드 서비스 초기화
     await BackgroundService.initializeService();
     
+    // 5단계: 환경 서비스 초기화
+    await EnvironmentService.initialize();
+    await HeatstrokePreventionService.initialize();
+    
     // 저장된 설정 및 데이터 불러오기
     await _loadSavedData();
     
     // 백그라운드 서비스 리스너 등록
     _setupBackgroundServiceListeners();
+    
+    // 5단계: 환경 데이터 리스너 등록
+    _setupEnvironmentListeners();
+  }
+
+  // === 5단계: 환경 데이터 리스너 설정 ===
+  void _setupEnvironmentListeners() {
+    // 환경 데이터 변화 리스너
+    EnvironmentService.environmentDataStream.listen((data) {
+      setState(() {
+        _currentEnvironmentData = data;
+      });
+      
+      // 자동 시간 조정이 활성화되어 있고, 타이머가 정지 상태일 때만 적용
+      if (_autoAdjustEnabled && _currentState == TimerState.stopped) {
+        _applyEnvironmentBasedTimeAdjustment(data);
+      }
+      
+      // 강제 휴식 확인
+      _checkForceBreak(data);
+    });
+
+    // 수분 섭취 기록 리스너
+    HeatstrokePreventionService.waterIntakeStream.listen((records) {
+      setState(() {
+        _todayWaterIntake = records;
+      });
+    });
+
+    // 알림 리스너
+    HeatstrokePreventionService.alertStream.listen((alert) {
+      setState(() {
+        _lastAlert = alert;
+      });
+      
+      // 스낵바로 알림 표시
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(alert),
+            duration: const Duration(seconds: 4),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    });
+  }
+
+  // === 5단계: 환경 기반 시간 자동 조정 ===
+  void _applyEnvironmentBasedTimeAdjustment(EnvironmentData data) {
+    final recommendedWork = data.getRecommendedWorkMinutes();
+    final recommendedBreak = data.getRecommendedBreakMinutes();
+    
+    setState(() {
+      _workMinutes = recommendedWork;
+      _breakMinutes = recommendedBreak;
+      _resetToWorkState();
+    });
+    
+    // 조정 알림
+    final message = '환경에 따라 시간이 조정되었습니다: 작업 ${recommendedWork}분, 휴식 ${recommendedBreak}분';
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        duration: const Duration(seconds: 3),
+        backgroundColor: data.getRiskLevelColor(),
+      ),
+    );
+  }
+
+  // === 5단계: 강제 휴식 확인 ===
+  void _checkForceBreak(EnvironmentData data) {
+    if (data.riskLevel == HeatRiskLevel.danger && 
+        (_currentState == TimerState.work || _currentState == TimerState.stopped)) {
+      
+      // 작업 중이면 강제로 일시정지
+      if (_currentState == TimerState.work) {
+        _pauseTimer();
+      }
+      
+      // 강제 휴식 다이얼로그 표시
+      _showForceBreakDialog();
+    }
+  }
+
+  // === 5단계: 강제 휴식 다이얼로그 ===
+  void _showForceBreakDialog() {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: const Text('🚨 긴급 안전 알림'),
+          content: Text(HeatstrokePreventionService.getForceBreakMessage()),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.of(context).pop();
+                // 강제로 휴식 모드로 전환
+                setState(() {
+                  _currentState = TimerState.break_;
+                  _setBreakState();
+                });
+                _startForegroundTimer();
+              },
+              child: const Text('휴식 시작'),
+            ),
+          ],
+        );
+      },
+    );
   }
 
   // === 저장된 데이터 불러오기 ===
@@ -357,10 +482,50 @@ class _TimerPageState extends State<TimerPage> with WidgetsBindingObserver {
     );
   }
 
+  // === 5단계: 수분 섭취 다이얼로그 ===
+  void _showWaterIntakeDialog() {
+    final suggestions = HeatstrokePreventionService.getWaterIntakeSuggestions();
+    
+    showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: const Text('💧 수분 섭취 기록'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text('얼마나 마셨나요?'),
+              const SizedBox(height: 16),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                children: suggestions.map((amount) {
+                  return ElevatedButton(
+                    onPressed: () {
+                      HeatstrokePreventionService.addWaterIntake(amount);
+                      Navigator.of(context).pop();
+                    },
+                    child: Text('${amount}ml'),
+                  );
+                }).toList(),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('취소'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
   // === 시간 설정 다이얼로그 ===
   void _showSettingsDialog() {
     int tempWorkMinutes = _workMinutes;
     int tempBreakMinutes = _breakMinutes;
+    bool tempAutoAdjust = _autoAdjustEnabled;
 
     showDialog(
       context: context,
@@ -368,10 +533,22 @@ class _TimerPageState extends State<TimerPage> with WidgetsBindingObserver {
         return StatefulBuilder(
           builder: (context, setDialogState) {
             return AlertDialog(
-              title: const Text('⚙️ 시간 설정'),
+              title: const Text('⚙️ 설정'),
               content: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
+                  // 자동 조정 설정
+                  SwitchListTile(
+                    title: const Text('환경 기반 자동 조정'),
+                    subtitle: const Text('날씨에 따라 시간 자동 조정'),
+                    value: tempAutoAdjust,
+                    onChanged: (value) {
+                      setDialogState(() {
+                        tempAutoAdjust = value;
+                      });
+                    },
+                  ),
+                  const Divider(),
                   // 작업 시간 설정
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -440,6 +617,7 @@ class _TimerPageState extends State<TimerPage> with WidgetsBindingObserver {
                     setState(() {
                       _workMinutes = tempWorkMinutes;
                       _breakMinutes = tempBreakMinutes;
+                      _autoAdjustEnabled = tempAutoAdjust;
                       
                       // 현재 정지 상태라면 새 설정 적용
                       if (_currentState == TimerState.stopped) {
@@ -465,25 +643,98 @@ class _TimerPageState extends State<TimerPage> with WidgetsBindingObserver {
 
   // === 통계 다이얼로그 ===
   void _showStatsDialog() {
+    final waterProgress = HeatstrokePreventionService.getWaterIntakeProgress();
+    final totalWater = HeatstrokePreventionService.getTodayTotalWaterIntake();
+    final recommendedWater = HeatstrokePreventionService.getRecommendedDailyWaterIntake();
+    final riskScore = HeatstrokePreventionService.getTodayHeatRiskScore();
+    
     showDialog(
       context: context,
       builder: (BuildContext context) {
         return AlertDialog(
-          title: const Text('📊 통계'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('오늘 완료된 사이클: $_todayCompletedCycles개'),
-              const SizedBox(height: 8),
-              Text('총 완료된 사이클: $_totalCompletedCycles개'),
-              const SizedBox(height: 8),
-              Text('오늘 작업 시간: ${_todayCompletedCycles * _workMinutes}분'),
-              const SizedBox(height: 8),
-              Text('총 작업 시간: ${_totalCompletedCycles * _workMinutes}분'),
-              const SizedBox(height: 16),
-              const Text('💡 팁: 열사병 방지를 위해 규칙적인 휴식을 취하세요!'),
-            ],
+          title: const Text('📊 통계 & 건강 상태'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // 작업 통계
+                const Text('📈 작업 통계', style: TextStyle(fontWeight: FontWeight.bold)),
+                const SizedBox(height: 8),
+                Text('오늘 완료된 사이클: $_todayCompletedCycles개'),
+                Text('총 완료된 사이클: $_totalCompletedCycles개'),
+                Text('오늘 작업 시간: ${_todayCompletedCycles * _workMinutes}분'),
+                Text('총 작업 시간: ${_totalCompletedCycles * _workMinutes}분'),
+                
+                const SizedBox(height: 16),
+                const Divider(),
+                
+                // 수분 섭취 통계
+                const Text('💧 수분 섭취', style: TextStyle(fontWeight: FontWeight.bold)),
+                const SizedBox(height: 8),
+                Text('오늘 섭취량: ${totalWater}ml / ${recommendedWater}ml'),
+                Text('달성률: ${(waterProgress * 100).toStringAsFixed(1)}%'),
+                LinearProgressIndicator(
+                  value: waterProgress.clamp(0.0, 1.0),
+                  backgroundColor: Colors.grey.shade300,
+                  valueColor: AlwaysStoppedAnimation<Color>(
+                    waterProgress >= 0.8 ? Colors.blue : Colors.orange,
+                  ),
+                ),
+                
+                const SizedBox(height: 16),
+                const Divider(),
+                
+                // 환경 상태
+                if (_currentEnvironmentData != null) ...[
+                  const Text('🌡️ 환경 상태', style: TextStyle(fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 8),
+                  Text('위치: ${_currentEnvironmentData!.location}'),
+                  Text('온도: ${_currentEnvironmentData!.temperature.toStringAsFixed(1)}°C'),
+                  Text('습도: ${_currentEnvironmentData!.humidity.toStringAsFixed(1)}%'),
+                  Text('체감온도: ${_currentEnvironmentData!.heatIndex.toStringAsFixed(1)}°C'),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: _currentEnvironmentData!.getRiskLevelColor(),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Text(
+                      '${_currentEnvironmentData!.getRiskLevelEmoji()} ${_currentEnvironmentData!.riskLevel.name.toUpperCase()}',
+                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                    ),
+                  ),
+                  
+                  const SizedBox(height: 16),
+                  const Divider(),
+                ],
+                
+                // 위험 점수
+                const Text('🚨 오늘의 위험 점수', style: TextStyle(fontWeight: FontWeight.bold)),
+                const SizedBox(height: 8),
+                Text('${riskScore}/100'),
+                LinearProgressIndicator(
+                  value: riskScore / 100,
+                  backgroundColor: Colors.grey.shade300,
+                  valueColor: AlwaysStoppedAnimation<Color>(
+                    riskScore < 30 ? Colors.green : 
+                    riskScore < 60 ? Colors.orange : Colors.red,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  HeatstrokePreventionService.getHealthStatusMessage(),
+                  style: TextStyle(
+                    fontStyle: FontStyle.italic,
+                    color: riskScore < 30 ? Colors.green : 
+                           riskScore < 60 ? Colors.orange : Colors.red,
+                  ),
+                ),
+                
+                const SizedBox(height: 16),
+                const Text('💡 팁: 열사병 방지를 위해 규칙적인 휴식과 수분 섭취를 잊지 마세요!'),
+              ],
+            ),
           ),
           actions: [
             TextButton(
@@ -522,6 +773,12 @@ class _TimerPageState extends State<TimerPage> with WidgetsBindingObserver {
           : Colors.blue.shade100,
         elevation: 0,
         actions: [
+          // 5단계: 수분 섭취 버튼
+          IconButton(
+            onPressed: _showWaterIntakeDialog,
+            icon: const Icon(Icons.water_drop),
+            tooltip: '수분 섭취',
+          ),
           // 통계 버튼
           IconButton(
             onPressed: _showStatsDialog,
@@ -542,6 +799,63 @@ class _TimerPageState extends State<TimerPage> with WidgetsBindingObserver {
           padding: const EdgeInsets.all(32.0),
           child: Column(
             children: [
+              // === 5단계: 환경 상태 표시 ===
+              if (_currentEnvironmentData != null)
+                Container(
+                  padding: const EdgeInsets.all(16),
+                  margin: const EdgeInsets.only(bottom: 20),
+                  decoration: BoxDecoration(
+                    color: _currentEnvironmentData!.getRiskLevelColor().withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(
+                      color: _currentEnvironmentData!.getRiskLevelColor(),
+                      width: 2,
+                    ),
+                  ),
+                  child: Column(
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                '${_currentEnvironmentData!.getRiskLevelEmoji()} ${_currentEnvironmentData!.location}',
+                                style: const TextStyle(fontWeight: FontWeight.bold),
+                              ),
+                              Text('${_currentEnvironmentData!.temperature.toStringAsFixed(1)}°C (체감 ${_currentEnvironmentData!.heatIndex.toStringAsFixed(1)}°C)'),
+                            ],
+                          ),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                            decoration: BoxDecoration(
+                              color: _currentEnvironmentData!.getRiskLevelColor(),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Text(
+                              _currentEnvironmentData!.riskLevel.name.toUpperCase(),
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.bold,
+                                fontSize: 12,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        _currentEnvironmentData!.getRiskLevelMessage(),
+                        style: TextStyle(
+                          color: _currentEnvironmentData!.getRiskLevelColor(),
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+
               // === 현재 상태 표시 ===
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
@@ -626,6 +940,63 @@ class _TimerPageState extends State<TimerPage> with WidgetsBindingObserver {
               
               const SizedBox(height: 40),
               
+              // === 5단계: 수분 섭취 진행 상황 ===
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(12),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.grey.withValues(alpha: 0.2),
+                      spreadRadius: 2,
+                      blurRadius: 5,
+                      offset: const Offset(0, 2),
+                    ),
+                  ],
+                ),
+                child: Column(
+                  children: [
+                    Text(
+                      '💧 오늘의 수분 섭취',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.grey.shade700,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text('${HeatstrokePreventionService.getTodayTotalWaterIntake()}ml'),
+                        Text('/ ${HeatstrokePreventionService.getRecommendedDailyWaterIntake()}ml'),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    LinearProgressIndicator(
+                      value: HeatstrokePreventionService.getWaterIntakeProgress().clamp(0.0, 1.0),
+                      backgroundColor: Colors.grey.shade300,
+                      valueColor: AlwaysStoppedAnimation<Color>(
+                        HeatstrokePreventionService.getWaterIntakeProgress() >= 0.8 
+                          ? Colors.blue 
+                          : Colors.orange,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      '달성률: ${(HeatstrokePreventionService.getWaterIntakeProgress() * 100).toStringAsFixed(1)}%',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.grey.shade600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              
+              const SizedBox(height: 20),
+              
               // === 오늘의 진행 상황 표시 ===
               Container(
                 padding: const EdgeInsets.all(16),
@@ -687,7 +1058,13 @@ class _TimerPageState extends State<TimerPage> with WidgetsBindingObserver {
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
                         const Text('작업 시간:', style: TextStyle(fontWeight: FontWeight.w500)),
-                        Text('$_workMinutes분'),
+                        Row(
+                          children: [
+                            Text('$_workMinutes분'),
+                            if (_autoAdjustEnabled) 
+                              const Icon(Icons.auto_fix_high, size: 16, color: Colors.orange),
+                          ],
+                        ),
                       ],
                     ),
                     const SizedBox(height: 8),
@@ -695,7 +1072,13 @@ class _TimerPageState extends State<TimerPage> with WidgetsBindingObserver {
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
                         const Text('휴식 시간:', style: TextStyle(fontWeight: FontWeight.w500)),
-                        Text('$_breakMinutes분'),
+                        Row(
+                          children: [
+                            Text('$_breakMinutes분'),
+                            if (_autoAdjustEnabled) 
+                              const Icon(Icons.auto_fix_high, size: 16, color: Colors.orange),
+                          ],
+                        ),
                       ],
                     ),
                     const SizedBox(height: 8),
@@ -706,6 +1089,23 @@ class _TimerPageState extends State<TimerPage> with WidgetsBindingObserver {
                         Text('$_totalCompletedCycles개'),
                       ],
                     ),
+                    if (_autoAdjustEnabled) ...[
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
+                          const Icon(Icons.auto_fix_high, size: 16, color: Colors.orange),
+                          const SizedBox(width: 4),
+                          Text(
+                            '환경 기반 자동 조정 활성화',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: Colors.orange.shade700,
+                              fontStyle: FontStyle.italic,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
                   ],
                 ),
               ),
@@ -768,6 +1168,33 @@ class _TimerPageState extends State<TimerPage> with WidgetsBindingObserver {
                         style: TextStyle(
                           color: Colors.orange.shade700,
                           fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+
+              // === 5단계: 최근 알림 표시 ===
+              if (_lastAlert.isNotEmpty)
+                Container(
+                  margin: const EdgeInsets.only(top: 20),
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.blue.shade50,
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Colors.blue.shade200),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(Icons.info, color: Colors.blue.shade700),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          _lastAlert,
+                          style: TextStyle(
+                            color: Colors.blue.shade700,
+                            fontSize: 12,
+                          ),
                         ),
                       ),
                     ],

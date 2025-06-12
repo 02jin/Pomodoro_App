@@ -1,10 +1,15 @@
+import 'package:flutter/widgets.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:vibration/vibration.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:audioplayers/audioplayers.dart';  
 
 class NotificationService {
   static final FlutterLocalNotificationsPlugin _notificationsPlugin = 
       FlutterLocalNotificationsPlugin();
+  
+  // MP3 파일 재생을 위한 AudioPlayer 인스턴스
+  static final AudioPlayer _audioPlayer = AudioPlayer();
 
   // 초기화
   static Future<void> initialize() async {
@@ -30,6 +35,22 @@ class NotificationService {
     
     // 알림 권한 요청
     await _requestNotificationPermissions();
+    
+    // AudioPlayer 설정
+    await _setupAudioPlayer();
+  }
+
+  // AudioPlayer 초기 설정
+  static Future<void> _setupAudioPlayer() async {
+    try {
+      // 볼륨 설정 (0.0 ~ 1.0)
+      await _audioPlayer.setVolume(0.8);
+      
+      // 재생 모드 설정 (한 번만 재생)
+      await _audioPlayer.setReleaseMode(ReleaseMode.stop);
+    } catch (e) {
+      print('AudioPlayer 설정 실패: $e');
+    }
   }
 
   // 알림 권한 요청
@@ -37,6 +58,64 @@ class NotificationService {
     // 안드로이드 13 이상에서 알림 권한 요청
     if (await Permission.notification.isDenied) {
       await Permission.notification.request();
+    }
+  }
+
+  // 🎵 MP3 사운드 재생 함수들
+  
+  // 작업 완료 사운드 (성취감 있는 소리)
+  static Future<void> _playWorkCompleteSound() async {
+    try {
+      await _audioPlayer.stop(); // 기존 재생 중단
+      await _audioPlayer.play(AssetSource('sounds/work_complete.mp3'));
+    } catch (e) {
+      print('작업 완료 사운드 재생 실패: $e');
+      // 실패 시 시스템 기본 알림음으로 대체
+      await _playFallbackSound();
+    }
+  }
+
+  // 휴식 완료 사운드 (부드러운 차임벨)
+  static Future<void> _playBreakCompleteSound() async {
+    try {
+      await _audioPlayer.stop();
+      await _audioPlayer.play(AssetSource('sounds/break_complete.mp3'));
+    } catch (e) {
+      print('휴식 완료 사운드 재생 실패: $e');
+      await _playFallbackSound();
+    }
+  }
+
+  // 일반 알림 사운드 (짧고 명확한 소리)
+  static Future<void> _playNotificationSound() async {
+    try {
+      await _audioPlayer.stop();
+      await _audioPlayer.play(AssetSource('sounds/notification.mp3'));
+    } catch (e) {
+      print('알림 사운드 재생 실패: $e');
+      await _playFallbackSound();
+    }
+  }
+
+  // 긴급 알림 사운드 (경고음)
+  static Future<void> _playEmergencySound() async {
+    try {
+      await _audioPlayer.stop();
+      await _audioPlayer.play(AssetSource('sounds/emergency.mp3'));
+    } catch (e) {
+      print('긴급 알림 사운드 재생 실패: $e');
+      await _playFallbackSound();
+    }
+  }
+
+  // 폴백 사운드 (MP3 파일 재생 실패 시 시스템 알림음)
+  static Future<void> _playFallbackSound() async {
+    try {
+      // SystemSound는 import 'package:flutter/services.dart'; 필요
+      // await SystemSound.play(SystemSoundType.alert);
+      print('시스템 기본 알림음 사용');
+    } catch (e) {
+      print('폴백 사운드도 실패: $e');
     }
   }
 
@@ -50,12 +129,12 @@ class NotificationService {
       importance: Importance.high,
       priority: Priority.high,
       icon: '@mipmap/ic_launcher',
-      sound: RawResourceAndroidNotificationSound('notification_sound'),
+      // 커스텀 MP3를 사용하므로 시스템 사운드 제거
     );
 
     const DarwinNotificationDetails iOSPlatformChannelSpecifics =
         DarwinNotificationDetails(
-      sound: 'notification_sound.wav',
+      // 커스텀 MP3를 사용하므로 시스템 사운드 제거
     );
 
     const NotificationDetails platformChannelSpecifics = NotificationDetails(
@@ -70,6 +149,9 @@ class NotificationService {
       platformChannelSpecifics,
     );
 
+    // 커스텀 MP3 사운드 재생
+    await _playWorkCompleteSound();
+    
     // 진동
     await _vibrate();
   }
@@ -84,13 +166,10 @@ class NotificationService {
       importance: Importance.high,
       priority: Priority.high,
       icon: '@mipmap/ic_launcher',
-      sound: RawResourceAndroidNotificationSound('notification_sound'),
     );
 
     const DarwinNotificationDetails iOSPlatformChannelSpecifics =
-        DarwinNotificationDetails(
-      sound: 'notification_sound.wav',
-    );
+        DarwinNotificationDetails();
 
     const NotificationDetails platformChannelSpecifics = NotificationDetails(
       android: androidPlatformChannelSpecifics,
@@ -104,18 +183,25 @@ class NotificationService {
       platformChannelSpecifics,
     );
 
+    // 커스텀 MP3 사운드 재생
+    await _playBreakCompleteSound();
+    
     // 진동
     await _vibrate();
   }
 
   // 진동 기능
   static Future<void> _vibrate() async {
-    // 진동 지원 여부 확인
-    if (await Vibration.hasVibrator() ?? false) {
-      // 패턴 진동 (0.5초 진동, 0.2초 멈춤, 0.5초 진동)
-      await Vibration.vibrate(
-        pattern: [0, 500, 200, 500],
-      );
+    try {
+      // 진동 지원 여부 확인
+      if (await Vibration.hasVibrator() ?? false) {
+        // 패턴 진동 (0.5초 진동, 0.2초 멈춤, 0.5초 진동)
+        await Vibration.vibrate(
+          pattern: [0, 500, 200, 500],
+        );
+      }
+    } catch (e) {
+      print('진동 실행 실패: $e');
     }
   }
 
@@ -149,6 +235,15 @@ class NotificationService {
       platformChannelSpecifics,
     );
 
+    // 상황에 따른 사운드 재생
+    if (title.contains('작업')) {
+      await _playWorkCompleteSound();
+    } else if (title.contains('휴식')) {
+      await _playBreakCompleteSound();
+    } else {
+      await _playNotificationSound();
+    }
+
     await _vibrate();
   }
 
@@ -180,6 +275,8 @@ class NotificationService {
       body,
       platformChannelSpecifics,
     );
+    
+    // 진행 중 알림은 사운드 없음 (너무 시끄러워질 수 있음)
   }
 
   // 진행 중 알림 제거
@@ -187,8 +284,79 @@ class NotificationService {
     await _notificationsPlugin.cancel(3);
   }
 
+  // 커스텀 알림 (열사병 방지 등)
+  static Future<void> showCustomNotification(String title, String body, int notificationId) async {
+    const AndroidNotificationDetails androidPlatformChannelSpecifics =
+        AndroidNotificationDetails(
+      'heatstroke_prevention_channel',
+      'Heatstroke Prevention Notifications',
+      channelDescription: '열사병 방지 특화 알림',
+      importance: Importance.high,
+      priority: Priority.high,
+      icon: '@mipmap/ic_launcher',
+      color: Color.fromARGB(255, 255, 87, 34), // 주황빨강 색상
+    );
+
+    const DarwinNotificationDetails iOSPlatformChannelSpecifics =
+        DarwinNotificationDetails();
+
+    const NotificationDetails platformChannelSpecifics = NotificationDetails(
+      android: androidPlatformChannelSpecifics,
+      iOS: iOSPlatformChannelSpecifics,
+    );
+
+    await _notificationsPlugin.show(
+      notificationId,
+      title,
+      body,
+      platformChannelSpecifics,
+    );
+
+    // 상황에 따른 사운드 재생
+    if (title.contains('🚨') || body.contains('위험') || body.contains('긴급')) {
+      await _playEmergencySound();  // 긴급 상황 - 경고음
+    } else if (title.contains('💧') || body.contains('수분') || body.contains('물')) {
+      await _playNotificationSound();  // 수분 섭취 알림 - 일반 알림음
+    } else {
+      await _playNotificationSound();  // 기타 알림 - 일반 알림음
+    }
+    
+    // 진동도 함께
+    await _vibrate();
+  }
+
+  // 🎵 볼륨 조절 기능
+  static Future<void> setVolume(double volume) async {
+    try {
+      // volume: 0.0 (무음) ~ 1.0 (최대)
+      await _audioPlayer.setVolume(volume.clamp(0.0, 1.0));
+    } catch (e) {
+      print('볼륨 설정 실패: $e');
+    }
+  }
+
+  // 🔇 사운드 중지
+  static Future<void> stopAllSounds() async {
+    try {
+      await _audioPlayer.stop();
+    } catch (e) {
+      print('사운드 중지 실패: $e');
+    }
+  }
+
+
+
   // 모든 알림 제거
   static Future<void> cancelAllNotifications() async {
     await _notificationsPlugin.cancelAll();
+  }
+
+  // 리소스 정리 (앱 종료 시 호출)
+  static Future<void> dispose() async {
+    try {
+      await _audioPlayer.dispose();
+    } catch (e) {
+      print('AudioPlayer 정리 실패: $e');
+    }
   }
 }
