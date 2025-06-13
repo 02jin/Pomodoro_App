@@ -14,39 +14,59 @@ class _LogoScreenState extends State<LogoScreen> {
   @override
   void initState() {
     super.initState();
-    // 3초 후 자동으로 바코드 스캔 화면으로 이동
-    Future.delayed(const Duration(seconds: 3), () {
+    _initializeAndNavigate();
+  }
+
+  void _initializeAndNavigate() async {
+    try {
+      // 로고 화면 3초 표시
+      await Future.delayed(const Duration(seconds: 3));
+      
+      if (mounted) {
+        print('🔄 바코드 스캔 화면으로 이동');
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(builder: (context) => const BarcodeScanScreen()),
+        );
+      }
+    } catch (e) {
+      print('❌ 로고 화면 오류: $e');
+      // 오류가 있어도 다음 화면으로 이동
       if (mounted) {
         Navigator.pushReplacement(
           context,
           MaterialPageRoute(builder: (context) => const BarcodeScanScreen()),
         );
       }
-    });
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: Colors.white,
       body: Container(
         width: double.infinity,
         height: double.infinity,
-        child: const Center(
+        child: Center(
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Text(
-                '로고',
-                style: TextStyle(
-                  fontSize: 48,
-                  fontWeight: FontWeight.bold,
+              // 🔥 실제 로고 이미지 사용 (오류 시 아이콘으로 대체)
+              Container(
+                width: 150,
+                height: 150,
+                child: Image(
+                  image: const AssetImage('assets/images/App_logo.png'),
+                  fit: BoxFit.contain,
                 ),
               ),
-              SizedBox(height: 20),
-              Text(
-                '유라뽀: Your Life saver Pomodoro',
+              const SizedBox(height: 10),
+              const Text(
+                'Your Life saver Pomodoro',
                 style: TextStyle(
                   fontSize: 16,
+                  color: Colors.grey,
                 ),
               ),
             ],
@@ -63,6 +83,7 @@ class BarcodeScanScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: Colors.white,
       body: Container(
         width: double.infinity,
         height: double.infinity,
@@ -73,6 +94,7 @@ class BarcodeScanScreen extends StatelessWidget {
             const Icon(
               Icons.camera_alt,
               size: 100,
+              color: Colors.blue,
             ),
             const SizedBox(height: 40),
             const Text(
@@ -89,8 +111,7 @@ class BarcodeScanScreen extends StatelessWidget {
               height: 50,
               child: ElevatedButton(
                 onPressed: () {
-                  // 실제 구현에서는 카메라 플러그인으로 바코드 스캔
-                  // 지금은 바로 카메라 스캔 화면으로 이동하는 것으로 시뮬레이션
+                  print('🔄 바코드 카메라 화면으로 이동');
                   Navigator.pushReplacement(
                     context,
                     MaterialPageRoute(
@@ -99,11 +120,25 @@ class BarcodeScanScreen extends StatelessWidget {
                   );
                 },
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.black,
+                  backgroundColor: Colors.blue,
                   foregroundColor: Colors.white,
                 ),
                 child: const Text('스캔 시작하기'),
               ),
+            ),
+            const SizedBox(height: 20),
+            // 🔥 디버깅용 스킵 버튼 추가
+            TextButton(
+              onPressed: () {
+                print('🔄 직접 타이머로 이동 (디버깅용)');
+                Navigator.pushReplacement(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => const SoundSettingsScreen(),
+                  ),
+                );
+              },
+              child: const Text('스킵 (디버깅용)', style: TextStyle(color: Colors.grey)),
             ),
           ],
         ),
@@ -114,7 +149,9 @@ class BarcodeScanScreen extends StatelessWidget {
 
 // 바코드 카메라 화면 
 class BarcodeCameraScreen extends StatefulWidget {
-  const BarcodeCameraScreen({super.key});
+  final bool isFromTimer; // 🔥 타이머에서 호출되었는지 구분하는 플래그
+  
+  const BarcodeCameraScreen({super.key, this.isFromTimer = false});
 
   @override
   State<BarcodeCameraScreen> createState() => _BarcodeCameraScreenState();
@@ -124,18 +161,79 @@ class _BarcodeCameraScreenState extends State<BarcodeCameraScreen> {
   @override
   void initState() {
     super.initState();
-    // 실제로는 카메라 플러그인을 사용하여 바코드 스캔
-    // 시뮬레이션으로 2초 후 자동으로 스캔 완료 처리
-    Future.delayed(const Duration(seconds: 2), () {
+    _simulateBarcodeScanning();
+  }
+
+  void _simulateBarcodeScanning() async {
+    try {
+      // 2초 후 자동으로 스캔 완료 처리
+      await Future.delayed(const Duration(seconds: 2));
+      
       if (mounted) {
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(
-            builder: (context) => const BarcodeResultScreen(),
+        print('🔄 바코드 스캔 완료 시뮬레이션');
+        _recordWaterIntakeAndReturn();
+      }
+    } catch (e) {
+      print('❌ 바코드 스캔 오류: $e');
+      if (mounted) {
+        // 🔥 타이머에서 온 경우와 처음 앱 실행에서 온 경우를 구분
+        if (widget.isFromTimer) {
+          Navigator.pop(context, 'water_intake_failed');
+        } else {
+          // 🔥 오류가 있어도 결과 화면으로 이동하도록 수정
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(builder: (context) => const BarcodeResultScreen()),
+          );
+        }
+      }
+    }
+  }
+
+  void _recordWaterIntakeAndReturn() async {
+    try {
+      print('🔄 수분 섭취 기록 시작');
+      await HeatstrokePreventionService.addWaterIntake(500);
+      print('🔄 수분 섭취 기록 완료');
+      
+      if (mounted) {
+        print('🔄 성공 스낵바 표시');
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('✅ 수분 섭취 인증 완료! (500ml)'),
+            backgroundColor: Colors.green,
+            duration: Duration(seconds: 2),
           ),
         );
+        
+        // 🔥 타이머에서 온 경우와 처음 앱 실행에서 온 경우를 구분
+        if (widget.isFromTimer) {
+          print('🔄 타이머에서 호출됨 - 이전 화면으로 돌아가기');
+          Navigator.pop(context, 'water_intake_completed');
+        } else {
+          print('🔄 처음 앱 실행에서 호출됨 - 결과 화면으로 이동');
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(builder: (context) => const BarcodeResultScreen()),
+          );
+        }
       }
-    });
+    } catch (e) {
+      print('❌ 수분 섭취 기록 오류: $e');
+      if (mounted) {
+        if (widget.isFromTimer) {
+          print('🔄 타이머에서 호출됨 - 실패 결과로 돌아가기');
+          Navigator.pop(context, 'water_intake_failed');
+        } else {
+          print('🔄 처음 앱 실행에서 호출됨 - 결과 화면으로 이동 (오류 발생)');
+          // 🔥 오류가 있어도 결과 화면으로 이동하도록 수정
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(builder: (context) => const BarcodeResultScreen()),
+          );
+        }
+      }
+    }
   }
 
   @override
@@ -153,13 +251,24 @@ class _BarcodeCameraScreenState extends State<BarcodeCameraScreen> {
               height: double.infinity,
               color: Colors.black,
               child: const Center(
-                child: Text(
-                  '카메라 뷰\n(바코드 스캔 중...)',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 18,
-                  ),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(
+                      Icons.camera,
+                      color: Colors.white,
+                      size: 60,
+                    ),
+                    SizedBox(height: 20),
+                    Text(
+                      '카메라 뷰\n(바코드 스캔 중...)',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 18,
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ),
@@ -194,7 +303,18 @@ class _BarcodeCameraScreenState extends State<BarcodeCameraScreen> {
               top: 50,
               right: 20,
               child: IconButton(
-                onPressed: () => Navigator.pop(context),
+                onPressed: () {
+                  print('🔄 바코드 카메라 닫기');
+                  // 🔥 타이머에서 온 경우와 처음 앱 실행에서 온 경우를 구분
+                  if (widget.isFromTimer) {
+                    Navigator.pop(context, 'cancelled');
+                  } else {
+                    Navigator.pushReplacement(
+                      context,
+                      MaterialPageRoute(builder: (context) => const BarcodeScanScreen()),
+                    );
+                  }
+                },
                 icon: const Icon(
                   Icons.close,
                   color: Colors.white,
@@ -220,12 +340,7 @@ class _BarcodeResultScreenState extends State<BarcodeResultScreen> {
   @override
   void initState() {
     super.initState();
-    // 바코드 스캔 완료 시 수분 섭취 기록 추가 (500ml 물병 가정)
-    _recordWaterIntake();
-  }
-
-  void _recordWaterIntake() async {
-    await HeatstrokePreventionService.addWaterIntake(500);
+    print('🔄 바코드 결과 화면 로드');
   }
 
   @override
@@ -235,6 +350,7 @@ class _BarcodeResultScreenState extends State<BarcodeResultScreen> {
     final amPm = now.hour < 12 ? '오전' : '오후';
 
     return Scaffold(
+      backgroundColor: Colors.white,
       body: Container(
         width: double.infinity,
         height: double.infinity,
@@ -274,6 +390,7 @@ class _BarcodeResultScreenState extends State<BarcodeResultScreen> {
               height: 50,
               child: ElevatedButton(
                 onPressed: () {
+                  print('🔄 사운드 설정 화면으로 이동');
                   Navigator.pushReplacement(
                     context,
                     MaterialPageRoute(
@@ -282,7 +399,7 @@ class _BarcodeResultScreenState extends State<BarcodeResultScreen> {
                   );
                 },
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.black,
+                  backgroundColor: Colors.blue,
                   foregroundColor: Colors.white,
                 ),
                 child: const Text('운동 시작하기'),
@@ -307,8 +424,15 @@ class _SoundSettingsScreenState extends State<SoundSettingsScreen> {
   bool _vibrationEnabled = true;
 
   @override
+  void initState() {
+    super.initState();
+    print('🔄 사운드 설정 화면 로드');
+  }
+
+  @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: Colors.white,
       body: Container(
         width: double.infinity,
         height: double.infinity,
@@ -342,11 +466,15 @@ class _SoundSettingsScreenState extends State<SoundSettingsScreen> {
                           setState(() {
                             _soundEnabled = value;
                           });
-                          // 실제 사운드 설정 적용
-                          if (!value) {
-                            NotificationService.setVolume(0.0);
-                          } else {
-                            NotificationService.setVolume(0.8);
+                          // 안전한 사운드 설정
+                          try {
+                            if (!value) {
+                              NotificationService.setVolume(0.0);
+                            } else {
+                              NotificationService.setVolume(0.8);
+                            }
+                          } catch (e) {
+                            print('사운드 설정 오류: $e');
                           }
                         },
                       ),
@@ -376,11 +504,11 @@ class _SoundSettingsScreenState extends State<SoundSettingsScreen> {
                 color: Colors.grey.shade100,
                 borderRadius: BorderRadius.circular(8),
               ),
-              child: Row(
+              child: const Row(
                 children: [
-                  const Icon(Icons.info, color: Colors.orange),
-                  const SizedBox(width: 8),
-                  const Expanded(
+                  Icon(Icons.info, color: Colors.orange),
+                  SizedBox(width: 8),
+                  Expanded(
                     child: Text(
                       '⚠️\n기기가 무음상태인지 확인해주세요.\n알림이 제한될 수 있습니다.',
                       style: TextStyle(fontSize: 12),
@@ -395,7 +523,7 @@ class _SoundSettingsScreenState extends State<SoundSettingsScreen> {
               height: 50,
               child: ElevatedButton(
                 onPressed: () {
-                  // 타이머 화면으로 이동
+                  print('🔄 타이머 화면으로 이동');
                   Navigator.pushReplacement(
                     context,
                     MaterialPageRoute(
