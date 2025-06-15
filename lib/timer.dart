@@ -327,7 +327,6 @@ class _TimerPageState extends State<TimerPage> with WidgetsBindingObserver {
   }
 
   void _onWorkTimerComplete() async {
-    _completedCycles++;
     _todayCompletedCycles++;
     _totalCompletedCycles++;
     
