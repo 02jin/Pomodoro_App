@@ -5,6 +5,7 @@ import 'notification_service.dart';
 import 'background_service.dart';
 import 'environment_service.dart';
 import 'heatstroke_prevention_service.dart';
+import 'onboarding_screen.dart';
 
 enum TimerState {
   work,
@@ -46,6 +47,15 @@ class _TimerPageState extends State<TimerPage> with WidgetsBindingObserver {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _initializeApp();
+    
+    // 🔥 수분 섭취 상태 변화를 주기적으로 체크
+    Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (mounted && _currentState == TimerState.break_) {
+        setState(() {
+          // UI 주기적 업데이트로 수분 섭취 상태 반영
+        });
+      }
+    });
   }
 
   @override
@@ -75,16 +85,46 @@ class _TimerPageState extends State<TimerPage> with WidgetsBindingObserver {
     }
   }
 
-  Future<void> _initializeApp() async {
-    await NotificationService.initialize();
-    await BackgroundService.initializeService();
-    await EnvironmentService.initialize();
-    await HeatstrokePreventionService.initialize();
+// timer.dart의 _initializeApp() 메서드를 이렇게 수정하세요
+
+Future<void> _initializeApp() async {
+  try {
+    print('타이머 페이지 초기화 시작');
     
+    print('환경 서비스 초기화 중...');
+    await EnvironmentService.initialize().timeout(
+      const Duration(seconds: 5),
+      onTimeout: () {
+        print('환경 서비스 초기화 타임아웃 - 기본값 사용');
+      },
+    );
+
+    print('열사병 방지 서비스 초기화 중...');
+    await HeatstrokePreventionService.initialize().timeout(
+      const Duration(seconds: 3),
+      onTimeout: () {
+        print('열사병 방지 서비스 초기화 타임아웃');
+      },
+    );
+    
+    print('저장된 데이터 로드 중...');
+    await _loadSavedData();
+
+    print('백그라운드 서비스 리스너 설정 중...');
+    _setupBackgroundServiceListeners();
+
+    print('환경 리스너 설정 중...');
+    _setupEnvironmentListeners();
+    
+    print('타이머 페이지 초기화 완료');
+    
+  } catch (e) {
+    print('타이머 페이지 초기화 오류: $e');
+    // 오류가 있어도 기본 설정으로 계속 진행
     await _loadSavedData();
     _setupBackgroundServiceListeners();
-    _setupEnvironmentListeners();
   }
+}
 
   void _setupEnvironmentListeners() {
     EnvironmentService.environmentDataStream.listen((data) {
@@ -251,6 +291,9 @@ class _TimerPageState extends State<TimerPage> with WidgetsBindingObserver {
   }
 
   void _startTimer() {
+    // 🔥 기존 타이머 먼저 정리
+    _timer?.cancel();
+    
     setState(() {
       if (_currentState == TimerState.stopped) {
         _currentState = TimerState.work;
@@ -265,6 +308,9 @@ class _TimerPageState extends State<TimerPage> with WidgetsBindingObserver {
   }
 
   void _startBreakTimer() {
+    // 🔥 기존 타이머 먼저 정리 - 이게 핵심 수정사항!
+    _timer?.cancel();
+    
     setState(() {
       _currentState = TimerState.break_;
       _previousState = TimerState.break_;
@@ -275,21 +321,28 @@ class _TimerPageState extends State<TimerPage> with WidgetsBindingObserver {
   }
 
   void _startForegroundTimer() {
+    // 🔥 안전장치: 기존 타이머가 있으면 취소
+    _timer?.cancel();
+    
     _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
-      setState(() {
-        _remainingSeconds--;
-        _currentMinutes = _remainingSeconds ~/ 60;
-        _currentSeconds = _remainingSeconds % 60;
+      if (mounted && (_currentState == TimerState.work || _currentState == TimerState.break_)) {
+        setState(() {
+          _remainingSeconds--;
+          _currentMinutes = _remainingSeconds ~/ 60;
+          _currentSeconds = _remainingSeconds % 60;
 
-        if (_remainingSeconds <= 0) {
-          _onTimerComplete();
-        }
-      });
+          if (_remainingSeconds <= 0) {
+            _onTimerComplete();
+          }
+        });
+      }
     });
   }
 
   void _pauseTimer() {
+    // 🔥 확실하게 타이머 정지
     _timer?.cancel();
+    _timer = null;
     
     if (_isBackgroundMode) {
       BackgroundService.stopBackgroundTimer();
@@ -304,18 +357,26 @@ class _TimerPageState extends State<TimerPage> with WidgetsBindingObserver {
 
   void _resetTimer() {
     _timer?.cancel();
+    _timer = null;
     
     BackgroundService.stopBackgroundTimer();
     NotificationService.cancelOngoingNotification();
     
     setState(() {
       _currentState = TimerState.stopped;
+      _isBackgroundMode = false;
       _resetToWorkState();
     });
+    
+    Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute(builder: (context) => const LogoScreen()),
+      (route) => false,
+    );
   }
 
   void _onTimerComplete() {
     _timer?.cancel();
+    _timer = null;
     
     setState(() {
       if (_currentState == TimerState.work) {
@@ -396,55 +457,101 @@ class _TimerPageState extends State<TimerPage> with WidgetsBindingObserver {
     );
   }
 
-  void _showWaterIntakeDialog() {
-    final suggestions = HeatstrokePreventionService.getWaterIntakeSuggestions();
-    
-    showDialog(
-      context: context,
-      builder: (BuildContext context) {
-        return AlertDialog(
-          title: const Text('수분 섭취 인증하기'),
-          content: Column(
+void _showWaterIntakeDialog() {
+  final suggestions = HeatstrokePreventionService.getWaterIntakeSuggestions();
+  
+  showDialog(
+    context: context,
+    builder: (BuildContext context) {
+      return AlertDialog(
+        title: const Text('수분 섭취 인증하기'),
+        content: SingleChildScrollView(
+          child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Text('지금은 휴식시간입니다.\n물 한잔 마셔볼까요?\n아래 버튼을 눌러 인증해주세요.'),
+              const Text(
+                '지금은 휴식시간입니다.\n물 한잔 마셔볼까요?\n아래 버튼을 눌러 인증해주세요.',
+                textAlign: TextAlign.center,
+              ),
               const SizedBox(height: 16),
-              ElevatedButton(
-                onPressed: () {
-                  Navigator.of(context).pop();
-                },
-                child: const Text('스캔 시작하기'),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  onPressed: () async {
+                    Navigator.of(context).pop(); // 다이얼로그 닫기
+
+                    // 🔥 여기가 핵심 수정사항! isFromTimer: true 추가
+                    final result = await Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => const BarcodeCameraScreen(isFromTimer: true),
+                      ),
+                    );
+
+                    if (result == 'water_intake_completed') {
+                      setState(() {
+                      });
+                      
+                      // 추가 성공 메시지
+                      if (mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text('🎉 바코드 스캔으로 수분 섭취 인증 완료!'),
+                            backgroundColor: Colors.green,
+                            duration: Duration(seconds: 3),
+                          ),
+                        );
+                      }
+                    } else if (result == 'water_intake_failed') {
+                      // 실패 시 메시지
+                      if (mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text('❌ 수분 섭취 인증에 실패했습니다.'),
+                            backgroundColor: Colors.red,
+                            duration: Duration(seconds: 2),
+                          ),
+                        );
+                      }
+                    }
+                    // cancelled의 경우 아무것도 하지 않음 (그냥 휴식 타이머 계속)
+                  },
+                  child: const Text('스캔 시작하기'),
+                ),
               ),
               const SizedBox(height: 16),
               const Text('또는 직접 입력:'),
               const SizedBox(height: 8),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+              // 🔥 버튼들을 세로로 배치하여 오버플로우 방지
+              Column(
                 children: suggestions.map((amount) {
-                  return ElevatedButton(
-                    onPressed: () {
-                      HeatstrokePreventionService.addWaterIntake(amount);
-                      Navigator.of(context).pop();
-                    },
-                    child: Text('${amount}ml'),
+                  return Container(
+                    width: double.infinity,
+                    margin: const EdgeInsets.only(bottom: 8),
+                    child: ElevatedButton(
+                      onPressed: () {
+                        HeatstrokePreventionService.addWaterIntake(amount);
+                        Navigator.of(context).pop();
+                        setState(() {});
+                      },
+                      child: Text('${amount}ml'),
+                    ),
                   );
                 }).toList(),
               ),
             ],
           ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: const Text('취소'),
-            ),
-          ],
-        );
-      },
-    );
-  }
-
-
-
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('취소'),
+          ),
+        ],
+      );
+    },
+  );
+}
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -530,10 +637,10 @@ class _TimerPageState extends State<TimerPage> with WidgetsBindingObserver {
                     child: ElevatedButton(
                       onPressed: _resetTimer,
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.black,
+                        backgroundColor: Colors.grey,
                         foregroundColor: Colors.white,
                       ),
-                      child: const Text('일시 정지'),
+                      child: const Text('처음으로'),
                     ),
                   ),
                 ] else if (_currentState == TimerState.work) ...[
@@ -541,7 +648,7 @@ class _TimerPageState extends State<TimerPage> with WidgetsBindingObserver {
                     width: double.infinity,
                     height: 50,
                     child: ElevatedButton(
-                      onPressed: _startBreakTimer, // 바로 휴식 타이머 시작
+                      onPressed: _startBreakTimer,
                       style: ElevatedButton.styleFrom(
                         backgroundColor: Colors.black,
                         foregroundColor: Colors.white,
@@ -556,7 +663,7 @@ class _TimerPageState extends State<TimerPage> with WidgetsBindingObserver {
                     child: ElevatedButton(
                       onPressed: _pauseTimer,
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.black,
+                        backgroundColor: Colors.orange,
                         foregroundColor: Colors.white,
                       ),
                       child: const Text('일시 정지'),
@@ -576,7 +683,7 @@ class _TimerPageState extends State<TimerPage> with WidgetsBindingObserver {
                       child: ElevatedButton(
                         onPressed: _showWaterIntakeDialog,
                         style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.black,
+                          backgroundColor: Colors.blue,
                           foregroundColor: Colors.white,
                         ),
                         child: const Text('수분 섭취 인증하기'),
@@ -595,7 +702,7 @@ class _TimerPageState extends State<TimerPage> with WidgetsBindingObserver {
                       child: ElevatedButton(
                         onPressed: _startTimer,
                         style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.black,
+                          backgroundColor: Colors.green,
                           foregroundColor: Colors.white,
                         ),
                         child: const Text('운동 시작하기'),
@@ -607,9 +714,9 @@ class _TimerPageState extends State<TimerPage> with WidgetsBindingObserver {
                     width: double.infinity,
                     height: 50,
                     child: ElevatedButton(
-                      onPressed: _pauseTimer,
+                      onPressed: _pauseTimer, // 🔥 휴식 중에도 일시정지 가능
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.black,
+                        backgroundColor: Colors.orange,
                         foregroundColor: Colors.white,
                       ),
                       child: const Text('일시 정지'),
@@ -635,7 +742,7 @@ class _TimerPageState extends State<TimerPage> with WidgetsBindingObserver {
                     child: ElevatedButton(
                       onPressed: _resetTimer,
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.black,
+                        backgroundColor: Colors.red,
                         foregroundColor: Colors.white,
                       ),
                       child: const Text('완전 정지'),
@@ -659,6 +766,6 @@ class _TimerPageState extends State<TimerPage> with WidgetsBindingObserver {
           ),
         ),
       ),
-    );
+    ); 
   }
 }
