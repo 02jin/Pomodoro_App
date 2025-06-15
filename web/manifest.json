@@ -1,6 +1,6 @@
 {
-    "name": "pomodoro_timer",
-    "short_name": "pomodoro_timer",
+    "name": "pomodoro_app",
+    "short_name": "pomodoro_app",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0175C2",
